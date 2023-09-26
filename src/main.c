@@ -503,7 +503,8 @@ void se_run_all_ar_cheats();
 void se_load_cheats(const char * filename);
 void se_save_cheats(const char* filename);
 void se_convert_cheat_code(char * text_code, int cheat_index);
-static void se_reset_core();
+void se_reset_core();
+float* se_get_inputs() { return emu_state.joy.inputs; }
 static bool se_load_theme_from_file(const char * filename);
 static bool se_draw_theme_region(int region, float x, float y, float w, float h);
 static bool se_draw_theme_region_tint(int region, float x, float y, float w, float h,uint32_t tint);
@@ -2181,7 +2182,7 @@ void se_load_rom(const char *filename){
   }
   return; 
 }
-static void se_reset_core(){
+void se_reset_core(){
   se_load_rom(gui_state.recently_loaded_games[0].path);
 }
 static bool se_write_save_to_disk(const char* path){
@@ -2300,7 +2301,8 @@ se_lcd_info_t se_get_lcd_info(){
     .gamma = 2.2
   };
 }
-static void se_emulate_single_frame(){
+void se_emulate_single_frame(){
+emu_state.render_frame = true;
   if(emu_state.system == SYSTEM_GB){
     if(gui_state.test_runner_mode){
       uint8_t palette[4*3] = { 0xff,0xff,0xff,0xAA,0xAA,0xAA,0x55,0x55,0x55,0x00,0x00,0x00 };
@@ -2320,7 +2322,7 @@ static void se_emulate_single_frame(){
 
   se_run_all_ar_cheats();
 }
-static void se_screenshot(uint8_t * output_buffer, int * out_width, int * out_height){
+void se_screenshot(uint8_t * output_buffer, int * out_width, int * out_height){
   *out_height=*out_width=0;
   // output_bufer is always SE_MAX_SCREENSHOT_SIZE bytes. RGB8
   if(emu_state.system==SYSTEM_GBA){
@@ -2337,7 +2339,20 @@ static void se_screenshot(uint8_t * output_buffer, int * out_width, int * out_he
     *out_height = SB_LCD_H;
     memcpy(output_buffer,scratch.gb.framebuffer,SB_LCD_W*SB_LCD_H*4);
   }
-  for(int i=3;i<SE_MAX_SCREENSHOT_SIZE;i+=4)output_buffer[i]=0xff;
+}
+uint32_t se_get_width()
+{
+    if (emu_state.system == SYSTEM_GB) return SB_LCD_W;
+    else if (emu_state.system == SYSTEM_GBA) return GBA_LCD_W;
+    else if (emu_state.system == SYSTEM_NDS) return NDS_LCD_W;
+    return 0;
+}
+uint32_t se_get_height()
+{
+    if (emu_state.system == SYSTEM_GB) return SB_LCD_H;
+    else if (emu_state.system == SYSTEM_GBA) return GBA_LCD_H;
+    else if (emu_state.system == SYSTEM_NDS) return NDS_LCD_H*2;
+    return 0;
 }
 typedef struct{
   uint8_t *data;
@@ -2676,6 +2691,38 @@ void se_save_cheats(const char * filename){
   }
   fclose(f);
 }
+uint32_t se_add_cheat(uint8_t* data, uint32_t size)
+{
+  for (uint32_t i = 0; i < 32; i++) {
+    if (cheats[i].state == -1) {
+      if (size <= 256)
+      {
+        if (size % 8 != 0) return 0xFFFFFFFF;
+        for (int j = 0; j < size; j += 4) {
+          cheats[i].buffer[j / 4] = (data[j + 0] << 24) | (data[j + 1] << 16) | (data[j + 2] << 8) | (data[j + 3] << 0);
+        }
+      }
+      else
+        return 0xFFFFFFFF;
+      cheats[i].state = 0;
+      cheats[i].size = size;
+      return i;
+    }
+  }
+  return 0xFFFFFFFF;
+}
+void se_remove_cheat(uint32_t index)
+{
+  cheats[index].state = -1;
+}
+void se_enable_cheat(uint32_t index)
+{
+  cheats[index].state = 1;
+}
+void se_disable_cheat(uint32_t index)
+{
+  cheats[index].state = 0;
+}
 void se_load_cheats(const char * filename){
   size_t data_size=0;
   uint8_t*data = sb_load_file_data(filename,&data_size);
@@ -3013,6 +3060,11 @@ void se_draw_lcd(uint8_t *data, int im_width, int im_height,int x, int y, int re
   sg_apply_uniforms(SG_SHADERSTAGE_FS, 0, SG_RANGE_REF(lcd_params));
   int verts = 6;
   sg_draw(0, verts, 1);
+}
+
+void se_touch(float x, float y){
+  emu_state.joy.touch_pos[0]=x;
+  emu_state.joy.touch_pos[1]=y;
 }
 
 void se_draw_image(uint8_t *data, int im_width, int im_height,int x, int y, int render_width, int render_height, bool has_alpha){
@@ -6475,6 +6527,7 @@ static void frame(void) {
       ++pushed;
       average_volume+=fabs(audio_buff[i]);
     }
+    printf("Pushed %d samples\n",pushed);
     saudio_push(audio_buff, samples_to_push/2);
     gui_state.audio_watchdog_timer = 0;
   }
@@ -6494,6 +6547,23 @@ static void frame(void) {
     se_emscripten_flush_fs();
     gui_state.last_saved_settings=gui_state.settings;
   }
+}
+void se_push_all_samples(void (*callback)(void* data, size_t size))
+{
+  enum{samples_to_push=128};
+  int pushed = 0;
+  while(true){
+    float audio_buff[samples_to_push];
+    if(sb_ring_buffer_size(&emu_state.audio_ring_buff)<=samples_to_push){
+      se_reset_audio_ring();
+      break;
+    }
+    callback(&emu_state.audio_ring_buff.data[emu_state.audio_ring_buff.read_ptr%SB_AUDIO_RING_BUFFER_SIZE], samples_to_push / 4);
+    pushed += samples_to_push;
+    emu_state.audio_ring_buff.read_ptr+=samples_to_push;
+    emu_state.audio_ring_buff.read_ptr%=SB_AUDIO_RING_BUFFER_SIZE;
+  }
+  printf("Pushed %d samples\n",pushed);
 }
 void se_load_settings(){
   se_load_recent_games_list();

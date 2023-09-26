@@ -110,6 +110,14 @@ if(NOT EMSCRIPTEN)
   set(ENABLE_HTTP_CONTROL_SERVER 1)
 endif()
 
+if(BUILD_HYDRA_CORE)
+  set(STANDALONE_CORE 1)
+endif()
+
+if(STANDALONE_CORE)
+  set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+endif()
+
 #=== LIBRARY: cimgui + Dear ImGui
 add_library(cimgui STATIC 
     src/cimgui/cimgui.cpp 
@@ -276,7 +284,9 @@ if(IOS)
     add_definitions(-DPLATFORM_IOS)
 endif()
 
-if(WIN32)
+if (STANDALONE_CORE)
+  add_library(${PROJECT_NAME} STATIC ${SKYEMU_SRC})
+elseif(WIN32)
     set(APP_ICON_RESOURCE_WINDOWS "${CMAKE_CURRENT_SOURCE_DIR}/src/resources/icons/appicon.rc")
     add_executable(${PROJECT_NAME} WIN32 ${SKYEMU_SRC} ${APP_ICON_RESOURCE_WINDOWS})
 elseif(MACOS OR IOS)
@@ -340,3 +350,10 @@ elseif(EMSCRIPTEN)
                 ${CMAKE_CURRENT_BINARY_DIR}/bin)
 endif()
 
+if(BUILD_HYDRA_CORE)
+  project(hydra_core CXX)
+  add_library(hydra_core SHARED src/hydra/core.cxx)
+  set_source_files_properties(src/hydra/core.cxx PROPERTIES COMPILE_FLAGS "-std=c++20")
+  target_include_directories(hydra_core PRIVATE src/hydra/core/include/)
+  target_link_libraries(hydra_core PRIVATE SkyEmu)
+endif()

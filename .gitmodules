@@ -1,0 +1,3 @@
+[submodule "src/hydra/core"]
+	path = src/hydra/core
+	url = https://github.com/hydra-emu/core
